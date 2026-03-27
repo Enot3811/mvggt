@@ -334,6 +334,7 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
     mem_before = torch.cuda.memory_allocated(device) / (1024 ** 2) # в Мегабайтах
+    time_before = time.time()
 
     dtype = torch.float16
     with torch.no_grad():
@@ -343,13 +344,15 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
     # Снимаем показания после инференса
     peak_mem = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
     mem_for_inference = peak_mem - mem_before
-
+    time_after = time.time()
+    time_inference = time_after - time_before
     profiler_path = os.path.join(target_dir, "profiler.txt")
     with open(profiler_path, "w") as f:
         profiler_str = f"""Количество кадров: {imgs.shape[0]}
         Память под модель (веса): {mem_before:.2f} MB
         Пиковая память (всего): {peak_mem:.2f} MB
         Память, потраченная на инференс ({imgs.shape[0]} кадров): {mem_for_inference:.2f} MB
+        Время инференса: {time_inference:.2f} с
         """
         f.write(profiler_str)
         print(profiler_str)
