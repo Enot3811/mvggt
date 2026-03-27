@@ -330,10 +330,30 @@ def run_model(target_dir, model, text_prompt=None) -> dict:
         input_ids = text_inputs['input_ids'].to(device)
         attention_mask = text_inputs['attention_mask'].to(device)
 
+    # Замеряем расход памяти
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats(device)
+    mem_before = torch.cuda.memory_allocated(device) / (1024 ** 2) # в Мегабайтах
+
     dtype = torch.float16
     with torch.no_grad():
         with torch.amp.autocast('cuda', dtype=dtype):
             predictions = model(imgs[None], input_ids=input_ids, attention_mask=attention_mask) # Add batch dimension
+
+    # Снимаем показания после инференса
+    peak_mem = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+    mem_for_inference = peak_mem - mem_before
+
+    profiler_path = os.path.join(target_dir, "profiler.txt")
+    with open(profiler_path, "w") as f:
+        profiler_str = f"""Количество кадров: {imgs.shape[0]}
+        Память под модель (веса): {mem_before:.2f} MB
+        Пиковая память (всего): {peak_mem:.2f} MB
+        Память, потраченная на инференс ({imgs.shape[0]} кадров): {mem_for_inference:.2f} MB
+        """
+        f.write(profiler_str)
+        print(profiler_str)
+
     predictions['images'] = imgs[None].permute(0, 1, 3, 4, 2)
     predictions['conf'] = torch.sigmoid(predictions['conf'])
     edge = depth_edge(predictions['local_points'][..., 2], rtol=0.03)
