@@ -1,0 +1,42 @@
+flowchart TD
+    Dataset["Датасет ScanRefer (база для MVRefer)\n- RGB кадры из видео\n- Текстовый запрос (T)\n- GT 3D маска объекта (M*)\n- GT геометрия: точки (X_i) и позы (T_i)"]
+    
+    Sampling["Сэмплирование N=8 кадров\n(Обеспечение видимости: ≥ 1 кадра с целевым объектом)"]
+    
+    Batch["Подготовка Батча\n(Batch size = 16 образцов)\n1 образец = 8 кадров + текст"]
+    
+    Dataset --> Sampling
+    Sampling -->|"(8, 224, 224, 3) + текст"| Batch
+    
+    MVGGT["Модель MVGGT\n(совместная реконструкция и сегментация)"]
+    
+    Batch -->|Входные данные| MVGGT
+    
+    Outputs["Предсказания модели\n- 3D маска объекта (M)\n- 2D маски для каждого кадра (m_i)\n- 3D геометрия (S')"]
+    
+    MVGGT --> Outputs
+
+    %% Блок Обучения
+    subgraph Training["Обучение (Training)"]
+        direction TB
+        Loss_BCE["L_BCE\n(Лосс 3D маски M)"]
+        Loss_PVSO["L_PVSO\n(PVSO лосс для 2D масок m_i)"]
+        Optimizer["Optimizer: AdamW\n(lr = 1e-4)"]
+        
+        Loss_BCE --> Optimizer
+        Loss_PVSO --> Optimizer
+    end
+
+    Outputs -->|"M и GT"| Loss_BCE
+    Outputs -->|"m_i и GT"| Loss_PVSO
+    
+    %% Блок Метрик
+    subgraph Evaluation["Оценка (Evaluation Metrics)"]
+        direction TB
+        Metric_Global["Global 3D mIoU\n(Оценка итоговой 3D маски)"]
+        Metric_View["View mIoU\n(Усреднённый IoU по всем 2D кадрам)"]
+        Metric_Pos["mIoU_pos\n(IoU на кадрах, где объект виден)"]
+        Metric_Neg["mIoU_neg\n(IoU на пустых кадрах - Suppression)"]
+    end
+    
+    Outputs -.->|"Тестирование"| Evaluation
