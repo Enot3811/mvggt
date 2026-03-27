@@ -1,0 +1,15 @@
+torch
+torchvision
+numpy
+pillow
+opencv-python
+plyfile
+huggingface_hub
+safetensors
+transformers
+scipy
+# below for gradio
+gradio
+trimesh
+matplotlib
+spaces

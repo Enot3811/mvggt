@@ -1,0 +1,62 @@
+flowchart TD
+    Input["Входные изображения\n(N варьируется от 2 до 24)"]
+    DINOv2["DINOv2 Encoder (заморожен)\n(D_model = 1024 для ViT-Large)"]
+    
+    Input -->|"(N_views, 224, 224, 3)"| DINOv2
+
+    subgraph Encoder["Alternating Attention Module: 36 слоёв"]
+        direction TB
+        LocalAttn["Local (View-wise) Attention\nBatched Self-Attention"]
+        GlobalAttn["Global Attention\nBatched Self-Attention"]
+        
+        LocalAttn -->|"(N_views, 256, D_model)"| GlobalAttn
+    end
+
+    DINOv2 -->|"(N_views, 256, D_model)"| LocalAttn
+
+    %% Ветка предсказания точек X_i
+    subgraph Decoder_Points["Decoder ветка: Координаты точек (X_i)"]
+        direction TB
+        DecAttn_X["Local Self-Attention (5 слоёв)"]
+        MLP_X["MLP"]
+        PixelShuffle_X["Pixel Shuffle"]
+        Out_X["Локальная карта точек X_i"]
+        
+        DecAttn_X -->|"(N_views, 256, D_model)"| MLP_X
+        MLP_X -->|"(N_views, 256, 588)"| PixelShuffle_X
+        PixelShuffle_X -->|"(N_views, 224, 224, 3)"| Out_X
+    end
+
+    %% Ветка предсказания confidence C_i
+    subgraph Decoder_Conf["Decoder ветка: Confidence (C_i)"]
+        direction TB
+        DecAttn_C["Local Self-Attention (5 слоёв)"]
+        MLP_C["MLP"]
+        PixelShuffle_C["Pixel Shuffle"]
+        Out_C["Карта уверенности C_i"]
+        
+        DecAttn_C -->|"(N_views, 256, D_model)"| MLP_C
+        MLP_C -->|"(N_views, 256, 196)"| PixelShuffle_C
+        PixelShuffle_C -->|"(N_views, 224, 224, 1)"| Out_C
+    end
+
+    %% Ветка предсказания камеры T_i
+    subgraph Decoder_Cam["Decoder ветка: Поза камеры (T_i)"]
+        direction TB
+        DecAttn_Cam["Local Self-Attention (5 слоёв)"]
+        MLP1_Cam["MLP\n(Предобработка)"]
+        AvgPool_Cam["Average Pooling\n(Усреднение 256 токенов)"]
+        MLP2_Cam["MLP\n(9 для R, 3 для t)"]
+        SVD_Cam["SVD Orthogonalization\n(Перевод 9D -> 3x3 матрица R)"]
+        Out_Cam["Поза камеры T_i\n(Матрица SE(3) с R и t)"]
+        
+        DecAttn_Cam -->|"(N_views, 256, D_model)"| MLP1_Cam
+        MLP1_Cam -->|"(N_views, 256, D_model)"| AvgPool_Cam
+        AvgPool_Cam -->|"(N_views, D_model)"| MLP2_Cam
+        MLP2_Cam -->|"(N_views, 12)"| SVD_Cam
+        SVD_Cam -->|"(N_views, 4, 4)"| Out_Cam
+    end
+
+    GlobalAttn -->|"(N_views, 256, D_model)"| DecAttn_X
+    GlobalAttn -->|"(N_views, 256, D_model)"| DecAttn_C
+    GlobalAttn -->|"(N_views, 256, D_model)"| DecAttn_Cam

@@ -1,0 +1,87 @@
+flowchart TD
+    %% Ветка визуальная (из Pi3)
+    Input_Img["Входные изображения\n(N варьируется от 2 до 24)"]
+    DINOv2["DINOv2 Encoder (заморожен)\n(D_model = 1024)"]
+    
+    Input_Img -->|"(N_views, 224, 224, 3)"| DINOv2
+
+    %% Ветка текстовая
+    Input_Text["Текстовый запрос\n(Referring Expression)"]
+    RoBERTa["RoBERTa Encoder (заморожен)\n(D_bert = 768)"]
+    
+    Input_Text -->|"(N_tokens)"| RoBERTa
+    RoBERTa -->|"(N_tokens, 768)"| F_lang["F_lang (Текстовые эмбеддинги)"]
+
+    %% Ветка реконструкции (Pi3)
+    subgraph ReconBranch["Reconstruction Branch (Pi3, заморожен)"]
+        direction TB
+        Pi3_First24["Alternating Attention Module\n(Первые 24 слоя)"]
+        
+        subgraph Pi3_Last12["Последние 12 слоёв (Источник геометрических фич)"]
+            direction TB
+            LocalAttn_R["Local (View-wise) Attention"]
+            GlobalAttn_R["Global Attention"]
+            
+            LocalAttn_R -->|"(N_views, 256, D_model)"| GlobalAttn_R
+        end
+        
+        Pi3_First24 -->|"(N_views, 256, D_model)"| LocalAttn_R
+        
+        Pi3_Decoders["Декодеры Pi3 (Поза, Точки, Confidence)\nВыдают S' (Point cloud)"]
+        GlobalAttn_R -->|"(N_views, 256, D_model)"| Pi3_Decoders
+    end
+
+    DINOv2 -->|"(N_views, 256, D_model)"| Pi3_First24
+
+    %% Ветка мультимодального декодера (MVGGT)
+    subgraph MultiBranch["Multimodal Branch (12 слоёв)"]
+        direction TB
+        
+        LocalAttn_M["1) Local (View-wise) Attention"]
+        CrossAttn1_M["2) Cross-Attention с текстом\n(Q: Img, K/V: Text)"]
+        AddGeo1_M["3) Сложение (Sum)\nс F_geo (Local) через Conv 1x1"]
+        
+        GlobalAttn_M["4) Global Attention"]
+        CrossAttn2_M["5) Cross-Attention с текстом\n(Q: Img, K/V: Text)"]
+        AddGeo2_M["6) Сложение (Sum)\nс F_geo (Global) через Conv 1x1"]
+
+        LocalAttn_M -->|"(N_views, 256, D_model)"| CrossAttn1_M
+        CrossAttn1_M -->|"(N_views, 256, D_model)"| AddGeo1_M
+        AddGeo1_M -->|"(N_views, 256, D_model)"| GlobalAttn_M
+        GlobalAttn_M -->|"(N_views, 256, D_model)"| CrossAttn2_M
+        CrossAttn2_M -->|"(N_views, 256, D_model)"| AddGeo2_M
+    end
+
+    %% Входы в мультимодальную ветку
+    DINOv2 -->|"(N_views, 256, D_model)"| LocalAttn_M
+    
+    %% Языковые фичи идут в оба Cross-Attention
+    F_lang -->|"(N_tokens, 768)"| CrossAttn1_M
+    F_lang -->|"(N_tokens, 768)"| CrossAttn2_M
+    
+    %% Геометрические фичи (F_geo) передаются из Pi3 в Multimodal Branch
+    LocalAttn_R -.->|"F_geo (Local)\n(N_views, 256, D_model)"| AddGeo1_M
+    GlobalAttn_R -.->|"F_geo (Global)\n(N_views, 256, D_model)"| AddGeo2_M
+
+    %% Декодер мультимодальной ветки (предсказание 2D масок)
+    subgraph Decoder_Mask["Decoder ветка: Сегментационные маски (M_i)"]
+        direction TB
+        DecAttn_M["Local Self-Attention (5 слоёв)"]
+        MLP_M["MLP"]
+        PixelShuffle_M["Pixel Shuffle"]
+        Out_M["2D Маски для каждого вида (m_i)"]
+        
+        DecAttn_M -->|"(N_views, 256, D_model)"| MLP_M
+        MLP_M -->|"(N_views, 256, 196)"| PixelShuffle_M
+        PixelShuffle_M -->|"(N_views, 224, 224, 1)"| Out_M
+    end
+
+    AddGeo2_M -->|"(N_views, 256, D_model)"| DecAttn_M
+
+    %% Финальная сборка 3D маски
+    BackProject["Back-projection & Aggregation\n(Проекция 2D масок на 3D облако)"]
+    Final_3D_Mask["Итоговая 3D маска M\n(Размер: K точек)"]
+
+    Pi3_Decoders -.->|"Камеры и Depth (S')"| BackProject
+    Out_M -->|"2D Маски (m_i)"| BackProject
+    BackProject --> Final_3D_Mask
