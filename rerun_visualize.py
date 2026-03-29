@@ -172,10 +172,6 @@ if __name__ == "__main__":
         help="Фиксированный порог для маски (от 0.0 до 1.0). Если не указан, используется интерактивный ползунок-таймлайн."
     )
     
-    args = parser.parse_args([
-        "/home/enot/Загрузки/scenes/scene1/predictions.npz",
-        "--threshold",
-        "0.5",
-    ])
+    args = parser.parse_args()
     
     visualize_with_rerun(args.npz_path, mask_threshold=args.threshold)
